@@ -1,0 +1,21 @@
+# Build artifacts
+/build/
+
+# VS code settings
+.vscode/
+.clang-format
+
+# Credential
+/include/secrets.h
+
+# --- ESP-IDF config ---
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.ci.json
+/sdkconfig.defaults.esp32*
+/CMakeCache.txt
+/CMakeFiles/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeUserPresets.json
