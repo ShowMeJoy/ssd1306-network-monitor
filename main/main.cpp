@@ -14,9 +14,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ssd1306.h"
+// other
+#include <esp_http_client.h>
+#include <string>
 
 #define TAG "wifi_time"
 #define TAG1 "SSD1306"
+#define TAG2 "HTTP_CLIENT"
+char external_ip[64] = {0};
 
 void init_i2c_if_needed(SSD1306_t &dev) {
 #if CONFIG_I2C_INTERFACE
@@ -66,7 +71,6 @@ static void on_got_ip(void *, esp_event_base_t, int32_t, void *) {
 }
 
 void setup_time() {
-
     // прочитать время
     time_t now;
     struct tm t;
@@ -79,25 +83,53 @@ void setup_time() {
     ESP_LOGI(TAG, "Local time: %s", buf);
 }
 
+esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
+
+    switch (evt->event_id) {
+    case HTTP_EVENT_ON_DATA:
+        if (evt->data_len) {
+            snprintf(external_ip, sizeof(external_ip), "%.*s", evt->data_len, (char *)evt->data);
+
+            printf("External IP: %.*s\n", evt->data_len, (char *)evt->data);
+        }
+        break;
+    default:
+        break;
+    }
+    return ESP_OK;
+}
+
 extern "C" void app_main() {
     wifi_connect();
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip, nullptr,
                                         nullptr);
 
+    esp_http_client_config_t config = {.url = "http://api.ipify.org",
+                                       .event_handler = _http_event_handler};
     SSD1306_t dev;
 
     init_i2c_if_needed(dev);
     ssd1306_init(&dev, 128, 64);
     char lineChar[20];
 
-    static int prev_sec = -1, prev_yday = -1;
-
     ssd1306_clear_screen(&dev, false);
+    static int prev_sec = -1, prev_yday = -1;
+    char prev_ip[64] = {0};
     while (true) {
         time_t now;
         struct tm t{};
         time(&now);
         localtime_r(&now, &t);
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_http_client_perform(client);
+        esp_http_client_cleanup(client);
+
+        if (strcmp(external_ip, prev_ip) != 0) {
+            ssd1306_display_text(&dev, 1, external_ip, 64, false);
+            strncpy(prev_ip, external_ip, sizeof(prev_ip) - 1);
+            prev_ip[sizeof(external_ip) - 1] = '\0';
+        }
 
         if (t.tm_sec != prev_sec) {
             char s[17];
