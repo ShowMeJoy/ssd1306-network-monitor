@@ -16,7 +16,6 @@
 #include "ssd1306.h"
 // other
 #include <esp_http_client.h>
-#include <stdbool.h>
 
 #define TAG "wifi_time"
 #define TAG1 "SSD1306"
