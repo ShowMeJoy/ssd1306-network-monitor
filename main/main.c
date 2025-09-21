@@ -16,21 +16,21 @@
 #include "ssd1306.h"
 // other
 #include <esp_http_client.h>
-#include <string>
+#include <stdbool.h>
 
 #define TAG "wifi_time"
 #define TAG1 "SSD1306"
 #define TAG2 "HTTP_CLIENT"
 char external_ip[64] = {0};
 
-void init_i2c_if_needed(SSD1306_t &dev) {
+void init_i2c_if_needed(SSD1306_t *dev) {
 #if CONFIG_I2C_INTERFACE
     ESP_LOGI(TAG1, "INTERFACE is i2c");
     ESP_LOGI(TAG1, "CONFIG_SDA_GPIO=%d", CONFIG_SDA_GPIO);
     ESP_LOGI(TAG1, "CONFIG_SCL_GPIO=%d", CONFIG_SCL_GPIO);
     ESP_LOGI(TAG1, "CONFIG_RESET_GPIO=%d", CONFIG_RESET_GPIO);
 
-    i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
+    i2c_master_init(dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
 #endif // CONFIG_I2C_INTERFACE
 }
 
@@ -89,8 +89,6 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     case HTTP_EVENT_ON_DATA:
         if (evt->data_len) {
             snprintf(external_ip, sizeof(external_ip), "%.*s", evt->data_len, (char *)evt->data);
-
-            printf("External IP: %.*s\n", evt->data_len, (char *)evt->data);
         }
         break;
     default:
@@ -99,34 +97,29 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     return ESP_OK;
 }
 
-extern "C" void app_main() {
-    wifi_connect();
-    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip, nullptr,
-                                        nullptr);
+void wifi_time_task(void *pvParameters) {
+    SSD1306_t dev = {0};
+    init_i2c_if_needed(&dev);
+    ssd1306_init(&dev, 128, 64);
+    ssd1306_clear_screen(&dev, 0);
+
+    static int prev_sec = -1, prev_yday = -1;
+    static char prev_ip[64] = {0};
 
     esp_http_client_config_t config = {.url = "http://api.ipify.org",
                                        .event_handler = _http_event_handler};
-    SSD1306_t dev;
 
-    init_i2c_if_needed(dev);
-    ssd1306_init(&dev, 128, 64);
-    char lineChar[20];
+    esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    ssd1306_clear_screen(&dev, false);
-    static int prev_sec = -1, prev_yday = -1;
-    char prev_ip[64] = {0};
-    while (true) {
+    while (1) {
         time_t now;
-        struct tm t{};
+        struct tm t;
         time(&now);
         localtime_r(&now, &t);
-
-        esp_http_client_handle_t client = esp_http_client_init(&config);
         esp_http_client_perform(client);
-        esp_http_client_cleanup(client);
 
         if (strcmp(external_ip, prev_ip) != 0) {
-            ssd1306_display_text(&dev, 1, external_ip, 64, false);
+            ssd1306_display_text(&dev, 1, external_ip, 64, 0);
             strncpy(prev_ip, external_ip, sizeof(prev_ip) - 1);
             prev_ip[sizeof(external_ip) - 1] = '\0';
         }
@@ -134,7 +127,7 @@ extern "C" void app_main() {
         if (t.tm_sec != prev_sec) {
             char s[17];
             snprintf(s, sizeof(s), "%02d:%02d:%02d      ", t.tm_hour, t.tm_min, t.tm_sec);
-            ssd1306_display_text(&dev, 4, s, 16, false);
+            ssd1306_display_text(&dev, 4, s, 16, 0);
             prev_sec = t.tm_sec;
         }
 
@@ -142,10 +135,21 @@ extern "C" void app_main() {
             char d[33];
             snprintf(d, sizeof(d), "%02d.%02d.%04d      ", t.tm_mday, t.tm_mon + 1,
                      t.tm_year + 1900);
-            ssd1306_display_text(&dev, 2, d, 16, false);
+            ssd1306_display_text(&dev, 2, d, 16, 0);
             prev_yday = t.tm_yday;
         }
 
         vTaskDelay(pdMS_TO_TICKS(200));
     }
+
+    esp_http_client_cleanup(client);
+    vTaskDelete(NULL);
+}
+
+void app_main() {
+    wifi_connect();
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip, nullptr,
+                                        nullptr);
+
+    xTaskCreate(wifi_time_task, "wifi_time_task", 8192, NULL, 5, NULL);
 }
